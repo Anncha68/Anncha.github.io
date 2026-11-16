@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<title>タイムレコーダー（店舗打刻用）</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="タイムレコーダー">
+<meta name="theme-color" content="#13284B">
+<style>
+:root{--p:#13284B;--bg:#f8fafc;--c:#fff;--t:#0f172a;--m:#64748b;--b:#e2e8f0}
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent}
+body{background:var(--bg);color:var(--t);padding:12px;display:flex;justify-content:center}
+.container{width:100%;max-width:600px;background:var(--c);border-radius:12px;box-shadow:0 4px 6px -1px rgba(0,0,0,.1);overflow:hidden;margin-top:10px}
+header{background:var(--p);color:#fff;padding:18px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px}
+header h1{font-size:1.25rem}.clock-display{text-align:right}.clock-time{font-size:1.5rem;font-weight:700;letter-spacing:1px}.clock-date{font-size:.8rem;opacity:.9}
+.content{padding:20px}
+.form-group{margin-bottom:20px}label{display:block;margin-bottom:6px;font-weight:700;font-size:.9rem}
+select{width:100%;padding:12px;border:1px solid var(--b);border-radius:6px;font-size:1rem;background:#fff}
+.status-badge{display:inline-block;padding:6px 12px;border-radius:20px;font-size:.85rem;font-weight:700;color:#fff}
+.badge-out{background:#94a3b8}.badge-working{background:#16a34a}.badge-break{background:#ca8a04}
+.stamp-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:20px}
+.stamp-btn{padding:24px 10px;border:none;border-radius:10px;font-size:1.15rem;font-weight:700;color:#fff;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;touch-action:manipulation}
+.stamp-btn:active:not(:disabled){transform:scale(.97)}.stamp-btn:disabled{opacity:.35;cursor:not-allowed}
+.btn-in{background:#16a34a}.btn-out{background:#dc2626}.btn-break-start{background:#ca8a04}.btn-break-end{background:#2563eb}
+.sub-text{font-size:.7rem;font-weight:400;opacity:.9}
+.alert{padding:14px;border-radius:8px;margin-top:16px;font-size:.95rem;text-align:center;font-weight:600}
+.alert-success{background:#dcfce7;color:#15803d}
+.alert-danger{background:#fee2e2;color:#b91c1c}
+.loading{text-align:center;padding:30px;color:var(--m)}
+</style>
+</head>
+<body>
+<div class="container">
+<header><h1>タイムレコーダー</h1><div class="clock-display"><div id="clockDate" class="clock-date">----/--/-- (-)</div><div id="clockTime" class="clock-time">--:--:--</div></div></header>
+<div class="content">
+<div id="loadingView" class="loading">データを読み込んでいます...</div>
+<div id="mainView" style="display:none">
+<div class="form-group">
+  <label for="storeSelect">📍打刻店舗（このタブレットの設置店舗）</label>
+  <select id="storeSelect"></select>
+</div>
+<div class="form-group" style="margin-top:16px">
+  <label for="employeeSelect">👤 対象社員を選択</label>
+  <select id="employeeSelect" onchange="onEmployeeSelectChange()">
+    <option value="">-- 社員を選択してください --</option>
+  </select>
+  <div style="margin-top:10px">現在の状態: <span id="currentStatusBadge" class="status-badge badge-out">未選択</span></div>
+</div>
+<div class="stamp-grid">
+<button id="btnIn" class="stamp-btn btn-in" onclick="recordStamp('出勤')" disabled>出勤<span class="sub-text">15分切り上げ</span></button>
+<button id="btnBreakStart" class="stamp-btn btn-break-start" onclick="recordStamp('休憩開始')" disabled>休憩開始<span class="sub-text">15分切り捨て</span></button>
+<button id="btnBreakEnd" class="stamp-btn btn-break-end" onclick="recordStamp('休憩終了')" disabled>休憩終了<span class="sub-text">15分切り上げ</span></button>
+<button id="btnOut" class="stamp-btn btn-out" onclick="recordStamp('退勤')" disabled>退勤<span class="sub-text">15分切り捨て</span></button>
+</div>
+<div id="stampMsg"></div>
+</div>
+</div>
+</div>
+
+<script>
+// ▼▼▼ ステップ2で取得したウェブアプリのURLをここに貼り付けてください ▼▼▼
+const GAS_URL = https://script.google.com/macros/s/AKfycbyg5Y_iT9GFW-9Op95U7xHEBZSfiF9jPTsmoa4zN7laYGLXkzIEl_Httb8KhU9GP0Z9/exec
+// ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
+let employees = [];
+let stores = [];
+
+window.onload = function() {
+  updateClock();
+  setInterval(updateClock, 1000);
+  initApp();
+};
+
+function updateClock() {
+  const n = new Date(), days = ['日','月','火','水','木','金','土'];
+  document.getElementById('clockDate').textContent = n.getFullYear()+'/'+String(n.getMonth()+1).padStart(2,'0')+'/'+String(n.getDate()).padStart(2,'0')+' ('+days[n.getDay()]+')';
+  document.getElementById('clockTime').textContent = String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0')+':'+String(n.getSeconds()).padStart(2,'0');
+}
+
+async function initApp() {
+  try {
+    const res = await fetch(GAS_URL + '?action=init');
+    const data = await res.json();
+    employees = data.employees;
+    stores = data.stores;
+    
+    // 店舗セレクトボックス作成
+    const sSelect = document.getElementById('storeSelect');
+    sSelect.innerHTML = '';
+    stores.forEach(s => sSelect.add(new Option(s, s)));
+    
+    // 社員セレクトボックス作成
+    const eSelect = document.getElementById('employeeSelect');
+    eSelect.innerHTML = '<option value="">-- 社員を選択してください --</option>';
+    employees.forEach(e => {
+      eSelect.add(new Option(`[${e.code}] ${e.name}`, e.code));
+    });
+    
+    document.getElementById('loadingView').style.display = 'none';
+    document.getElementById('mainView').style.display = 'block';
+  } catch (err) {
+    document.getElementById('loadingView').innerHTML = '<span style="color:#dc2626">初期データの読み込みに失敗しました。URLをご確認ください。</span>';
+  }
+}
+
+async function onEmployeeSelectChange() {
+  const code = document.getElementById('employeeSelect').value;
+  const badge = document.getElementById('currentStatusBadge');
+  
+  if (!code) {
+    badge.textContent = '未選択';
+    badge.className = 'status-badge badge-out';
+    toggleButtons(null);
+    return;
+  }
+  
+  badge.textContent = '確認中...';
+  badge.className = 'status-badge badge-out';
+  
+  try {
+    const res = await fetch(`${GAS_URL}?action=status&code=${code}`);
+    const data = await res.json();
+    const lt = data.latestType;
+    
+    badge.textContent = (lt === '未出勤') ? '未出勤' : lt;
+    badge.className = 'status-badge ' + ((lt === '出勤' || lt === '休憩終了') ? 'badge-working' : (lt === '休憩開始' ? 'badge-break' : 'badge-out'));
+    toggleButtons(lt);
+  } catch (err) {
+    badge.textContent = '取得エラー';
+    toggleButtons(null);
+  }
+}
+
+function toggleButtons(lt) {
+  const bIn = document.getElementById('btnIn'), bOut = document.getElementById('btnOut'), bBS = document.getElementById('btnBreakStart'), bBE = document.getElementById('btnBreakEnd');
+  bIn.disabled = bOut.disabled = bBS.disabled = bBE.disabled = true;
+  if (!lt || lt === '退勤' || lt === '未出勤') bIn.disabled = false;
+  else if (lt === '出勤' || lt === '休憩終了') { bOut.disabled = false; bBS.disabled = false; }
+  else if (lt === '休憩開始') bBE.disabled = false;
+}
+
+function roundTime15(d, type) {
+  const r = new Date(d), m = r.getMinutes();
+  r.setMinutes((type === '出勤' || type === '休憩終了' ? Math.ceil(m / 15) : Math.floor(m / 15)) * 15);
+  r.setSeconds(0); r.setMilliseconds(0);
+  return r;
+}
+
+async function recordStamp(type) {
+  const code = document.getElementById('employeeSelect').value;
+  const store = document.getElementById('storeSelect').value;
+  if (!code) return;
+  
+  const emp = employees.find(e => e.code === code);
+  const now = new Date();
+  const rd = roundTime15(now, type);
+  
+  const msgEl = document.getElementById('stampMsg');
+  msgEl.className = '';
+  msgEl.innerHTML = '<div class="alert" style="background:#f1f5f9;color:#64748b">打刻を送信中...</div>';
+  
+  try {
+    const params = new URLSearchParams({
+      action: 'stamp',
+      code: emp.code,
+      name: emp.name,
+      type: type,
+      store: store,
+      timestamp: now.toISOString(),
+      roundedTimestamp: rd.toISOString()
+    });
+    
+    const res = await fetch(GAS_URL, {
+      method: 'POST',
+      body: params
+    });
+    const result = await res.json();
+    
+    if (result.status === 'success') {
+      msgEl.innerHTML = `<div class="alert alert-success">${emp.name} さんの「${type}」を打刻しました（${store}）</div>`;
+      onEmployeeSelectChange();
+    } else {
+      throw new Error();
+    }
+  } catch (err) {
+    msgEl.innerHTML = `<div class="alert alert-danger">送信に失敗しました。通信環境を確認してください。</div>`;
+  }
+}
+</script>
+</body>
+</html>
